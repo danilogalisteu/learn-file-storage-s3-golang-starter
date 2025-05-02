@@ -1,9 +1,13 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -59,16 +63,38 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusBadRequest, "Unable to get file type", err)
 		return
 	}
-
-	fileData := make([]byte, header.Size)
-	_, err = file.Read(fileData)
+	mediaType, _, err := mime.ParseMediaType(fileType)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to read file", err)
+		respondWithError(w, http.StatusBadRequest, "Unable to parse media type", err)
+		return
+	}
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "File is not a JPEG or PNG image", err)
 		return
 	}
 
-	fileString := fmt.Sprintf("data:%s;base64,%s", fileType, base64.StdEncoding.EncodeToString(fileData))
-	dbVideo.ThumbnailURL = &fileString
+	assetExt := strings.Split(mediaType, "/")[1]
+	if assetExt == "" {
+		respondWithError(w, http.StatusBadRequest, "Unable to get file extension", err)
+		return
+	}
+	assetName := fmt.Sprintf("%s.%s", videoID, assetExt)
+	assetPath := filepath.Join(cfg.assetsRoot, assetName)
+	assetFile, err := os.Create(assetPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to create asset file", err)
+		return
+	}
+	defer assetFile.Close()
+
+	_, err = io.Copy(assetFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to copy file", err)
+		return
+	}
+
+	assetURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, assetName)
+	dbVideo.ThumbnailURL = &assetURL
 	dbVideo.UpdatedAt = time.Now()
 	err = cfg.db.UpdateVideo(dbVideo)
 	if err != nil {
