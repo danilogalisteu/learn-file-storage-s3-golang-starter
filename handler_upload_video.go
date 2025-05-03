@@ -91,15 +91,30 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Unable to copy file", err)
 		return
 	}
-	_, err = tempFile.Seek(0, io.SeekStart)
+
+	fastTempFilePath, err := processVideoForFastStart(tempFile.Name())
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to seek file", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to process video", err)
+		return
+	}
+	defer os.Remove(fastTempFilePath)
+
+	aspectRatio, err := getVideoAspectRatio(fastTempFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to get video aspect ratio", err)
 		return
 	}
 
-	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	fastTempFile, err := os.Open(fastTempFilePath)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to get video aspect ratio", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to open processed video", err)
+		return
+	}
+	defer fastTempFile.Close()
+
+	_, err = fastTempFile.Seek(0, io.SeekStart)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to seek file", err)
 		return
 	}
 
@@ -115,7 +130,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(videoKey),
-		Body:        tempFile,
+		Body:        fastTempFile,
 		ContentType: aws.String(mediaType),
 	})
 	if err != nil {
